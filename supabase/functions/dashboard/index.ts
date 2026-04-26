@@ -3,14 +3,10 @@ import { corsHeaders } from "../_shared/cors.ts"
 
 Deno.serve(async (req) => {
   console.log("🔥 DASHBOARD FUNCTION HIT")
-  console.log("Method:", req.method)
-  console.log("URL:", req.url)
-  console.log("Headers:", Object.fromEntries(req.headers))
 
   const headers = corsHeaders(req)
 
   if (req.method === "OPTIONS") {
-    console.log("🟡 Preflight request received")
     return new Response(null, {
       status: 204,
       headers,
@@ -18,21 +14,26 @@ Deno.serve(async (req) => {
   }
 
   try {
-    console.log("🟢 Entering try block")
+    // ✅ Parse request body
+    const body = await req.json()
+    const user_id = body?.user_id
 
-    const user = {
-      id: "00000000-0000-0000-0000-000000000001",
-      email: "dev@teamdesk.local",
+    console.log("📥 Incoming user_id:", user_id)
+
+    // ❌ Validate
+    if (!user_id) {
+      return new Response(
+        JSON.stringify({ error: "user_id is required" }),
+        { status: 400, headers }
+      )
     }
-
-    console.log("👤 Mock user:", user)
 
     const admin = supabaseAdmin()
 
     console.log("📡 Calling RPC get_full_dashboard")
 
     const { data, error } = await admin.rpc("get_full_dashboard", {
-      p_user_id: user.id,
+      p_user_id: user_id,
     })
 
     if (error) {
@@ -40,9 +41,9 @@ Deno.serve(async (req) => {
       throw error
     }
 
-    console.log("✅ RPC SUCCESS:", data)
+    console.log("✅ RPC SUCCESS")
 
-    return new Response(JSON.stringify({ user, dashboard: data }), {
+    return new Response(JSON.stringify({ dashboard: data }), {
       status: 200,
       headers: {
         ...headers,
@@ -55,7 +56,6 @@ Deno.serve(async (req) => {
     return new Response(
       JSON.stringify({
         error: err.message,
-        stack: err.stack,
       }),
       {
         status: 400,
