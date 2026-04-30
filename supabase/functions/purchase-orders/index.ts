@@ -1,6 +1,6 @@
 import { serve } from "https://deno.land/std/http/server.ts"
 import { supabaseAdmin, supabaseAnon } from "../_shared/supabaseClient.ts"
-import { json, error, handleOptions, safeJson } from "../_shared/cors.ts"
+import { json, error, handleOptions, safeJson } from "../_shared/cors.service.ts"
 
 console.log("🛒 PURCHASE ORDERS MODULE LOADED")
 
