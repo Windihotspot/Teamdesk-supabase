@@ -15,18 +15,18 @@ serve(async (req) => {
     if (!user) return error(req, "Unauthorized", 401)
 
     const admin = supabaseAdmin()
-    const url   = new URL(req.url)
-    const body  = req.method !== "GET" ? await safeJson(req) as any : null
+    const url = new URL(req.url)
+    const body = req.method !== "GET" ? await safeJson(req) as any : null
     const action = url.searchParams.get("action") || body?.action
 
     // ── GET list ──────────────────────────────────────────
     if (req.method === "GET" && (!action || action === "list")) {
-      const status     = url.searchParams.get("status")
-      const requester  = url.searchParams.get("requester_id")
+      const status = url.searchParams.get("status")
+      const requester = url.searchParams.get("requester_id")
       const my_approvals = url.searchParams.get("my_approvals") === "true"
-      const page       = parseInt(url.searchParams.get("page") || "1")
-      const limit      = parseInt(url.searchParams.get("limit") || "20")
-      const offset     = (page - 1) * limit
+      const page = parseInt(url.searchParams.get("page") || "1")
+      const limit = parseInt(url.searchParams.get("limit") || "20")
+      const offset = (page - 1) * limit
 
       let query = admin
         .from("v_supply_requests_full")
@@ -34,9 +34,9 @@ serve(async (req) => {
         .order("submitted_at", { ascending: false })
         .range(offset, offset + limit - 1)
 
-      if (status)        query = query.eq("status", status)
-      if (requester)     query = query.eq("requester_id", requester)
-      if (my_approvals)  query = query.eq("approver_id", user.id).eq("status", "pending_approval")
+      if (status) query = query.eq("status", status)
+      if (requester) query = query.eq("requester_id", requester)
+      if (my_approvals) query = query.eq("approver_id", user.id).eq("status", "pending_approval")
 
       const { data, error: dbErr, count } = await query
       if (dbErr) {
@@ -112,18 +112,18 @@ serve(async (req) => {
       const { data: newRequest, error: insertErr } = await admin
         .from("supply_requests")
         .insert({
-          requester_id:          user.id,
-          team_id:               team_id || null,
+          requester_id: user.id,
+          team_id: team_id || null,
           supply_id,
           quantity_requested,
           unit_price_at_request: supply.unit_price,
-          priority:              priority || "normal",
-          status:                "pending_approval",
-          needed_by_date:        needed_by_date || null,
-          reason:                reason || null,
-          workflow_id:           workflow?.id || null,
-          current_approver_id:   workflow?.approver_user_id || null,
-          current_level:         1,
+          priority: priority || "normal",
+          status: "pending_approval",
+          needed_by_date: needed_by_date || null,
+          reason: reason || null,
+          workflow_id: workflow?.id || null,
+          current_approver_id: workflow?.approver_user_id || null,
+          current_level: 1,
         })
         .select()
         .single()
@@ -137,7 +137,7 @@ serve(async (req) => {
       if (workflow?.approver_user_id) {
         await admin.from("notifications").insert({
           user_id: workflow.approver_user_id,
-          title:   `New Supply Request: ${supply.name}`,
+          title: `New Supply Request: ${supply.name}`,
           message: `${user.email} requested ${quantity_requested} unit(s) of ${supply.name}. Request #${newRequest.request_number}`,
         })
       }
@@ -203,6 +203,87 @@ serve(async (req) => {
       }, {})
 
       return json(req, stats)
+    }
+
+    if (req.method === "PATCH" && action === "update") {
+      const { id, quantity_requested, priority, needed_by_date, reason } = body || {}
+      if (!id) return error(req, "id required")
+
+      // verify ownership + editable status
+      const { data: existing } = await admin
+        .from("supply_requests")
+        .select("id, requester_id, status, supply_id, request_number")
+        .eq("id", id)
+        .single()
+
+      if (!existing) return error(req, "Request not found", 404)
+      if (existing.requester_id !== user.id)
+        return error(req, "Forbidden — not your request", 403)
+      if (!["draft", "pending_approval"].includes(existing.status))
+        return error(req, `Cannot edit a request in '${existing.status}' status`, 400)
+
+      // if quantity changed, re-validate stock + recalc total
+      let unit_price_at_request: number | undefined
+      if (quantity_requested !== undefined) {
+        const { data: supply, error: supErr } = await admin
+          .from("supplies")
+          .select("unit_price, current_stock")
+          .eq("id", existing.supply_id)
+          .single()
+
+        if (supErr || !supply) return error(req, "Supply not found", 404)
+        if (supply.current_stock < quantity_requested)
+          return error(req, `Insufficient stock. Available: ${supply.current_stock}`, 400)
+        unit_price_at_request = supply.unit_price
+      }
+
+      const patch: Record<string, any> = { updated_at: new Date().toISOString() }
+      if (quantity_requested !== undefined) patch.quantity_requested = Number(quantity_requested)
+      if (unit_price_at_request !== undefined) patch.unit_price_at_request = unit_price_at_request
+      if (priority !== undefined) patch.priority = priority
+      if (needed_by_date !== undefined) patch.needed_by_date = needed_by_date || null
+      if (reason !== undefined) patch.reason = reason || null
+
+      const { data, error: dbErr } = await admin
+        .from("supply_requests")
+        .update(patch)
+        .eq("id", id)
+        .select()
+        .single()
+
+      if (dbErr) return error(req, "Failed to update request", 500)
+      return json(req, data)
+    }
+
+    // ── DELETE hard-delete request ────────────────────────────────
+    // Only draft/pending_approval; only by the original requester.
+    // Pass id in query string: DELETE /supplies-requests?action=delete&id=…
+    if (req.method === "DELETE" || (req.method === "PATCH" && action === "delete")) {
+      const id = url.searchParams.get("id") || body?.id
+      if (!id) return error(req, "id required")
+
+      const { data: existing } = await admin
+        .from("supply_requests")
+        .select("id, requester_id, status, request_number")
+        .eq("id", id)
+        .single()
+
+      if (!existing) return error(req, "Request not found", 404)
+      if (existing.requester_id !== user.id)
+        return error(req, "Forbidden — not your request", 403)
+     
+
+      // delete comments + attachments first (FK constraints)
+      await admin.from("supply_request_comments").delete().eq("request_id", id)
+      await admin.from("supply_attachments").delete().eq("request_id", id)
+
+      const { error: dbErr } = await admin
+        .from("supply_requests")
+        .delete()
+        .eq("id", id)
+
+      if (dbErr) return error(req, "Failed to delete request", 500)
+      return json(req, { deleted: true, id, request_number: existing.request_number })
     }
 
     return error(req, "Unknown action or method", 400)
