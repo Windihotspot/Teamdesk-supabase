@@ -197,6 +197,193 @@ serve(async (req: Request) => {
       return new Response(JSON.stringify({ data }), { headers })
     }
 
+    // ================= GET (comprehensive) =================
+if (action === "get") {
+  console.log("🔍 GET PROJECT FLOW STARTED")
+
+  const { project_id } = body
+
+  if (!project_id) {
+    console.log("❌ Missing project_id")
+    return new Response(JSON.stringify({ error: "project_id required" }), {
+      status: 400,
+      headers,
+    })
+  }
+
+  console.log("📦 Fetching project:", project_id)
+
+  // Core project + team + members + project-level attachments
+  const { data: project, error: projectErr } = await supabase
+    .from("projects")
+    .select(`
+      *,
+      teams (
+        id,
+        name,
+        description,
+        team_members (
+          id,
+          role,
+          created_at,
+          users (
+            id,
+            email,
+            first_name,
+            last_name,
+            avatar_url
+          )
+        )
+      ),
+      attachments (
+        id,
+        file_url,
+        file_name,
+        file_size,
+        created_at,
+        uploaded_by
+      )
+    `)
+    .eq("id", project_id)
+    .is("deleted_at", null)
+    .single()
+
+  if (projectErr || !project) {
+    console.log("❌ Project fetch error:", projectErr?.message)
+    return new Response(
+      JSON.stringify({ error: projectErr?.message || "Project not found" }),
+      { status: 404, headers }
+    )
+  }
+
+  console.log("✅ Project fetched:", project.id)
+
+  // Tasks + assignees (separate query to avoid deep nesting limits)
+  const { data: tasks, error: tasksErr } = await supabase
+    .from("tasks")
+    .select(`
+      *,
+      task_assignees (
+        id,
+        users (
+          id,
+          email,
+          first_name,
+          last_name,
+          avatar_url
+        )
+      ),
+      comments (
+        id,
+        content,
+        created_at,
+        user_id,
+        users (
+          id,
+          first_name,
+          last_name,
+          avatar_url
+        ),
+        attachments (
+          id,
+          file_url,
+          file_name,
+          file_size,
+          created_at
+        )
+      ),
+      time_logs (
+        id,
+        start_time,
+        end_time,
+        duration,
+        user_id,
+        users (
+          id,
+          first_name,
+          last_name
+        )
+      )
+    `)
+    .eq("project_id", project_id)
+    .is("deleted_at", null)
+    .order("created_at", { ascending: false })
+
+  if (tasksErr) {
+    console.log("❌ Tasks fetch error:", tasksErr.message)
+    throw tasksErr
+  }
+
+  console.log("✅ Tasks fetched:", tasks?.length)
+
+  // Activity logs scoped to this project
+  const { data: activityLogs, error: activityErr } = await supabase
+    .from("activity_logs")
+    .select(`
+      id,
+      action,
+      entity_type,
+      entity_id,
+      metadata,
+      created_at,
+      ip_address,
+      status,
+      user_id
+    `)
+    .eq("entity_type", "project")
+    .eq("entity_id", project_id)
+    .order("created_at", { ascending: false })
+    .limit(50)
+
+  if (activityErr) {
+    console.log("⚠️ Activity logs fetch error:", activityErr.message)
+    // Non-fatal — continue without activity logs
+  }
+
+  console.log("✅ Activity logs fetched:", activityLogs?.length ?? 0)
+
+  // ---- Computed stats ----
+  const taskList = tasks ?? []
+  const stats = {
+    total_tasks: taskList.length,
+    by_status: taskList.reduce((acc: Record<string, number>, t) => {
+      acc[t.status] = (acc[t.status] ?? 0) + 1
+      return acc
+    }, {}),
+    by_priority: taskList.reduce((acc: Record<string, number>, t) => {
+      acc[t.priority] = (acc[t.priority] ?? 0) + 1
+      return acc
+    }, {}),
+    total_time_logged: taskList.reduce((sum: number, t) => {
+      const taskTime = (t.time_logs ?? []).reduce(
+        (s: number, l: { duration: number }) => s + (l.duration ?? 0),
+        0
+      )
+      return sum + taskTime
+    }, 0),
+    overdue_tasks: taskList.filter(
+      (t) =>
+        t.due_date &&
+        new Date(t.due_date) < new Date() &&
+        t.status !== "done"
+    ).length,
+  }
+
+  // ---- Shaped response ----
+  const response = {
+    data: {
+      ...project,
+      tasks: taskList,
+      activity_logs: activityLogs ?? [],
+      stats,
+    },
+  }
+
+  console.log("✅ Comprehensive project response shaped")
+
+  return new Response(JSON.stringify(response), { headers })
+}
+
     console.log("⚠️ Invalid action received:", action)
 
     return new Response(JSON.stringify({ error: "Invalid action" }), {

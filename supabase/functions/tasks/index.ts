@@ -137,8 +137,7 @@ serve(async (req: Request) => {
           *,
           task_assignees (
             id,
-            user_id,
-            users:user_id (id, first_name, last_name, avatar_url, email)
+            user_id
           ),
           comments (id),
           attachments (id),

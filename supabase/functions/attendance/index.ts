@@ -2,6 +2,7 @@ import { serve } from "https://deno.land/std/http/server.ts"
 import { supabaseAdmin, supabaseAnon } from "../_shared/supabaseClient.ts"
 import { getDistanceInMeters } from "../_shared/geo.ts"
 import { ok, fail, log, safeJson } from "../_shared/http.ts"
+import { corsHeaders } from "../_shared/cors.ts"  
 
 serve(async (req) => {
   const headers = req.headers
@@ -11,16 +12,14 @@ serve(async (req) => {
     url: req.url,
   })
 
-  // ✅ PRE-FLIGHT HANDLER (bulletproof)
+  /// ✅ PRE-FLIGHT HANDLER
   if (req.method === "OPTIONS") {
-    log("OPTIONS PRE-FLIGHT")
-    return new Response("ok", {
-      status: 204,
-      headers: {
-        ...Object.fromEntries(headers),
-      },
-    })
-  }
+  log("OPTIONS PRE-FLIGHT")
+  return new Response(null, {
+    status: 204,
+    headers: corsHeaders(req),
+  })
+}
 
   try {
     log("STEP 1 - PARSE BODY")

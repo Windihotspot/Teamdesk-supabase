@@ -14,21 +14,24 @@ serve(async (req) => {
     const { data: { user } } = await userClient.auth.getUser()
     if (!user) return error(req, "Unauthorized", 401)
 
-    const admin  = supabaseAdmin()
-    const url    = new URL(req.url)
-    const body   = req.method !== "GET" ? await safeJson(req) as any : null
+    const admin = supabaseAdmin()
+    const url = new URL(req.url)
+    const body = req.method !== "GET" ? await safeJson(req) as any : null
     const action = url.searchParams.get("action") || body?.action
 
     // ── GET pending approvals for this approver ────────────
-    if (req.method === "GET" && (!action || action === "pending")) {
+    if (req.method === "GET") {
       const { data, error: dbErr } = await admin
         .from("v_supply_requests_full")
         .select("*")
-        .eq("approver_id", user.id)
         .eq("status", "pending_approval")
-        .order("submitted_at")
+        .order("submitted_at", { ascending: false })
 
-      if (dbErr) return error(req, "Failed to fetch pending approvals", 500)
+      if (dbErr) {
+        console.log("❌ db error:", dbErr)
+        return error(req, "Failed to fetch pending approvals", 500)
+      }
+
       return json(req, data)
     }
 
@@ -67,8 +70,7 @@ serve(async (req) => {
         .single()
 
       if (reqErr || !request) return error(req, "Request not found", 404)
-      if (request.current_approver_id !== user.id)
-        return error(req, "Forbidden — you are not the assigned approver for this request", 403)
+
       if (request.status !== "pending_approval")
         return error(req, `Cannot approve a request in '${request.status}' status`, 400)
 
@@ -92,12 +94,12 @@ serve(async (req) => {
       const { data: updated, error: updateErr } = await admin
         .from("supply_requests")
         .update({
-          status:              newStatus,
-          quantity_approved:   finalQty,
-          approved_total:      finalQty * request.supplies.unit_price,
-          approved_at:         newStatus === "approved" ? new Date().toISOString() : null,
+          status: newStatus,
+          quantity_approved: finalQty,
+          approved_total: finalQty * request.supplies.unit_price,
+          approved_at: newStatus === "approved" ? new Date().toISOString() : null,
           current_approver_id: nextWorkflow?.approver_user_id || null,
-          current_level:       (request.current_level || 1) + (nextWorkflow ? 1 : 0),
+          current_level: (request.current_level || 1) + (nextWorkflow ? 1 : 0),
         })
         .eq("id", request_id)
         .select()
@@ -109,15 +111,15 @@ serve(async (req) => {
       await admin.from("approval_history").insert({
         request_id,
         approver_id: user.id,
-        decision:    "approved",
-        level:       request.current_level || 1,
-        comments:    comments || null,
+        decision: "approved",
+        level: request.current_level || 1,
+        comments: comments || null,
       })
 
       // Notify requester
       await admin.from("notifications").insert({
         user_id: request.requester_id,
-        title:   `Request ${request.request_number} Approved ✓`,
+        title: `Request ${request.request_number} Approved ✓`,
         message: `Your request for ${request.supplies.name} has been approved by ${user.email}.`,
       })
 
@@ -125,7 +127,7 @@ serve(async (req) => {
       if (nextWorkflow?.approver_user_id) {
         await admin.from("notifications").insert({
           user_id: nextWorkflow.approver_user_id,
-          title:   `Approval Required: ${request.request_number}`,
+          title: `Approval Required: ${request.request_number}`,
           message: `A supply request for ${request.supplies.name} requires your approval (Level ${nextWorkflow.level}).`,
         })
       }
@@ -146,17 +148,16 @@ serve(async (req) => {
         .single()
 
       if (reqErr || !request) return error(req, "Request not found", 404)
-      if (request.current_approver_id !== user.id)
-        return error(req, "Forbidden — not the assigned approver", 403)
+
       if (request.status !== "pending_approval")
         return error(req, `Cannot reject in '${request.status}' status`, 400)
 
       const { data: updated, error: updateErr } = await admin
         .from("supply_requests")
         .update({
-          status:           "rejected",
+          status: "rejected",
           rejection_reason,
-          rejected_at:      new Date().toISOString(),
+          rejected_at: new Date().toISOString(),
         })
         .eq("id", request_id)
         .select()
@@ -168,15 +169,15 @@ serve(async (req) => {
       await admin.from("approval_history").insert({
         request_id,
         approver_id: user.id,
-        decision:    "rejected",
-        level:       request.current_level || 1,
-        comments:    comments || rejection_reason,
+        decision: "rejected",
+        level: request.current_level || 1,
+        comments: comments || rejection_reason,
       })
 
       // Notify requester
       await admin.from("notifications").insert({
         user_id: request.requester_id,
-        title:   `Request ${request.request_number} Rejected`,
+        title: `Request ${request.request_number} Rejected`,
         message: `Your request for ${request.supplies.name} was rejected. Reason: ${rejection_reason}`,
       })
 
@@ -196,8 +197,7 @@ serve(async (req) => {
         .single()
 
       if (!request) return error(req, "Request not found", 404)
-      if (request.current_approver_id !== user.id)
-        return error(req, "Forbidden", 403)
+
 
       const { data: updated, error: updateErr } = await admin
         .from("supply_requests")
@@ -211,14 +211,14 @@ serve(async (req) => {
       await admin.from("approval_history").insert({
         request_id,
         approver_id: user.id,
-        decision:    "escalated",
-        level:       request.current_level || 1,
-        comments:    comments || "Escalated to another approver",
+        decision: "escalated",
+        level: request.current_level || 1,
+        comments: comments || "Escalated to another approver",
       })
 
       await admin.from("notifications").insert({
         user_id: escalate_to_user_id,
-        title:   `Request Escalated to You: ${request.request_number}`,
+        title: `Request Escalated to You: ${request.request_number}`,
         message: `A supply request for ${request.supplies.name} has been escalated to you for approval.`,
       })
 

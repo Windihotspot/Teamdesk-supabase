@@ -210,6 +210,34 @@ serve(async (req) => {
       return json(req, data)
     }
 
+    // ── DELETE purchase order (draft only) ───────────────
+if (req.method === "DELETE" || (req.method === "PATCH" && action === "delete")) {
+  const id = url.searchParams.get("id") || body?.id
+  if (!id) return error(req, "id required")
+
+  const { data: existing } = await admin
+    .from("purchase_orders")
+    .select("id, status, po_number, raised_by")
+    .eq("id", id)
+    .single()
+
+  if (!existing) return error(req, "PO not found", 404)
+  if (existing.status !== "draft")
+    return error(req, `Cannot delete a PO in '${existing.status}' status`, 400)
+
+  // delete related payments first
+  await admin.from("supply_payments").delete().eq("purchase_order_id", id)
+  await admin.from("supply_deliveries").delete().eq("purchase_order_id", id)
+
+  const { error: dbErr } = await admin
+    .from("purchase_orders")
+    .delete()
+    .eq("id", id)
+
+  if (dbErr) return error(req, "Failed to delete PO", 500)
+  return json(req, { deleted: true, id, po_number: existing.po_number })
+}
+
     return error(req, "Unknown action or method", 400)
 
   } catch (err: any) {

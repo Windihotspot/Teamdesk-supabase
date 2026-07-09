@@ -3,6 +3,7 @@ const allowedOrigins = new Set([
   "http://localhost:3001",
   "http://localhost:3002",
   "http://localhost:5173",
+  "https://team-desk-sandy.vercel.app", 
 ])
 
 export function corsHeaders(req: Request): Record<string, string> {
